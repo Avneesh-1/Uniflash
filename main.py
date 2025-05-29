@@ -42,7 +42,6 @@ def parse_sensor_data(data):
                 voltage = parts[i+2].replace("V", "").strip()
                 print(f"Parsed voltage: {voltage}")
             elif "$TDS$" in part:
-                # Extract TDS value
                 tds = parts[i+2].strip()
                 print(f"Parsed TDS: {tds}")
             elif "$Temp$" in part:
@@ -52,10 +51,12 @@ def parse_sensor_data(data):
         print(f"Error parsing data: {e}")
     return voltage, current, tds, temp, error
 
-def start_logging(ax, canvas, wb, ws, filename, ser, stop_event, root):
+def start_logging(ax, canvas, wb, ws, filename, ser, stop_event, root, selected_param):
     s_no = 1
     voltages = []
     currents = []
+    tds_values = []
+    temp_values = []
     timelapses = []
     start_time = time.time()
     print(f"Starting logging to file: {filename}")
@@ -63,7 +64,7 @@ def start_logging(ax, canvas, wb, ws, filename, ser, stop_event, root):
     # Initialize the plot
     ax.set_xlabel('Timelapse (s)')
     ax.set_ylabel('Value')
-    ax.set_title('Live Voltage vs Timelapse')
+    ax.set_title(f'Live {selected_param.get()} vs Timelapse')
     ax.grid(True)
     canvas.draw()
     
@@ -77,58 +78,92 @@ def start_logging(ax, canvas, wb, ws, filename, ser, stop_event, root):
                         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         voltage, current, tds, temp, error = parse_sensor_data(data)
                         
-                        # Process data if we have valid voltage or TDS
-                        if voltage or tds:
+                        # Process data if we have valid values
+                        if voltage or tds or temp:
                             try:
                                 # Convert values to float if they exist
-                                v = float(voltage) if voltage else ""
-                                tds_val = float(tds) if tds else ""
+                                v = float(voltage) if voltage else None
+                                tds_val = float(tds) if tds else None
+                                temp_val = float(temp) if temp else None
                                 t = time.time() - start_time
                                 
-                                print(f"Processing values - Voltage: {v}, TDS: {tds_val}")
+                                print(f"Processing values - Voltage: {v}, TDS: {tds_val}, Temp: {temp_val}")
                                 
-                                # Append data to lists if we have voltage
-                                if voltage:
+                                # Append data to lists
+                                if v is not None:
                                     voltages.append(v)
                                     timelapses.append(t)
+                                if tds_val is not None:
+                                    tds_values.append(tds_val)
+                                    if len(tds_values) > len(timelapses):
+                                        timelapses.append(t)
+                                if temp_val is not None:
+                                    temp_values.append(temp_val)
+                                    if len(temp_values) > len(timelapses):
+                                        timelapses.append(t)
                                 
                                 # Write to Excel
-                                row_data = [s_no, timestamp, v, current, tds_val, temp, error]
+                                row_data = [s_no, timestamp, v, current, tds_val, temp_val, error]
                                 print(f"Writing to Excel: {row_data}")
                                 ws.append(row_data)
                                 wb.save(filename)
                                 print(f"Data saved to Excel, row {s_no}")
                                 s_no += 1
                                 
-                                # Update plot if we have voltage data
-                                if voltage and len(voltages) > 0:
-                                    ax.clear()
-                                    ax.plot(timelapses, voltages, label='Voltage (V)', color='blue', linewidth=2)
-                                    ax.set_xlabel('Timelapse (s)')
-                                    ax.set_ylabel('Voltage (V)')
-                                    ax.set_title('Live Voltage vs Timelapse')
-                                    ax.grid(True)
-                                    ax.legend()
-                                    
-                                    # Set y-axis limits with some padding
-                                    min_val = min(voltages)
-                                    max_val = max(voltages)
+                                # Update plot based on selected parameter
+                                ax.clear()
+                                param = selected_param.get()
+                                
+                                # Get the appropriate data arrays based on selected parameter
+                                if param == "Voltage" and len(voltages) > 0:
+                                    data_values = voltages
+                                    label = 'Voltage (V)'
+                                    color = 'blue'
+                                    ylabel = 'Voltage (V)'
+                                elif param == "TDS" and len(tds_values) > 0:
+                                    data_values = tds_values
+                                    label = 'TDS'
+                                    color = 'red'
+                                    ylabel = 'TDS'
+                                elif param == "Temperature" and len(temp_values) > 0:
+                                    data_values = temp_values
+                                    label = 'Temperature (°C)'
+                                    color = 'green'
+                                    ylabel = 'Temperature (°C)'
+                                else:
+                                    data_values = []
+                                
+                                if data_values:
+                                    # Ensure we have matching lengths
+                                    plot_times = timelapses[:len(data_values)]
+                                    ax.plot(plot_times, data_values, label=label, color=color, linewidth=2)
+                                    ax.set_ylabel(ylabel)
+                                
+                                ax.set_xlabel('Timelapse (s)')
+                                ax.set_title(f'Live {param} vs Timelapse')
+                                ax.grid(True)
+                                ax.legend()
+                                
+                                # Set y-axis limits with some padding
+                                if data_values:
+                                    min_val = min(data_values)
+                                    max_val = max(data_values)
                                     padding = (max_val - min_val) * 0.1 if max_val != min_val else 0.1
                                     ax.set_ylim(min_val - padding, max_val + padding)
                                     
                                     # Set x-axis limits
-                                    ax.set_xlim(min(timelapses), max(timelapses))
-                                    
-                                    canvas.draw()
-                                    root.update_idletasks()
-                                    print("Graph updated")
+                                    ax.set_xlim(min(plot_times), max(plot_times))
+                                
+                                canvas.draw()
+                                root.update_idletasks()
+                                print("Graph updated")
                                 
                             except ValueError as e:
                                 print(f"Error converting values: {e}")
                             except Exception as e:
                                 print(f"Error processing data: {e}")
                         else:
-                            print("No valid voltage or TDS data received")
+                            print("No valid data received")
                 except serial.SerialException as e:
                     print(f"Serial port error: {e}")
                     break
@@ -174,8 +209,19 @@ def main():
     root.title("Arduino Excel Logger - Live Graph")
     root.geometry("800x600")  # Made window slightly larger
 
-    label = tk.Label(root, text="Live Voltage vs Timelapse", font=("Arial", 14))
-    label.pack(pady=5)
+    # Create a frame for the controls
+    control_frame = tk.Frame(root)
+    control_frame.pack(pady=5)
+
+    label = tk.Label(control_frame, text="Live Data vs Timelapse", font=("Arial", 14))
+    label.pack(side=tk.LEFT, padx=10)
+
+    # Create dropdown for parameter selection
+    selected_param = tk.StringVar(value="Voltage")
+    param_label = tk.Label(control_frame, text="Select Parameter:", font=("Arial", 10))
+    param_label.pack(side=tk.LEFT, padx=5)
+    param_dropdown = tk.OptionMenu(control_frame, selected_param, "Voltage", "TDS", "Temperature")
+    param_dropdown.pack(side=tk.LEFT, padx=5)
 
     # Create figure with larger size
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -189,7 +235,7 @@ def main():
         nonlocal logging_thread
         print("Start button clicked")
         start_button.config(state=tk.DISABLED)
-        logging_thread = threading.Thread(target=start_logging, args=(ax, canvas, wb, ws, filename, ser, stop_event, root))
+        logging_thread = threading.Thread(target=start_logging, args=(ax, canvas, wb, ws, filename, ser, stop_event, root, selected_param))
         logging_thread.daemon = True
         logging_thread.start()
         print("Logging thread started")
